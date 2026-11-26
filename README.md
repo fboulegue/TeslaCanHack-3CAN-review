@@ -1,21 +1,18 @@
-# TeslaCanHack 3CAN review package
+# TeslaCanHack 3CAN Review Package
 
-This private repository contains only the reusable three-CAN transport,
-Waveshare satellite, RX-load isolation, and routing design extracted from the
-TeslaCanHack prototype. It intentionally excludes the rest of the private
-firmware, vehicle-specific handlers, release binaries, and unrelated Git
-history.
+[![Build](https://github.com/fboulegue/TeslaCanHack-3CAN-review/actions/workflows/build.yml/badge.svg)](https://github.com/fboulegue/TeslaCanHack-3CAN-review/actions/workflows/build.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-It is a review package for the proposed combination of:
+Isolated, reusable **three-CAN transport**, **Waveshare ESP32-S3 satellite**, **RX-load isolation**, and **cross-bus routing** design extracted from the TeslaCanHack prototype.
 
-- a LILYGO T-2CAN as the main controller for local `can0` and `can1`; and
-- a Waveshare Industrial ESP32-S3 RS485/CAN as remote `can2` over UART.
+It intentionally excludes vehicle-specific application handlers, release binaries, and unrelated prototype history so the architecture and hardware-safe Listen-Only satellite firmware can be reviewed and built cleanly.
 
-The four requested commits are follow-up changes, not a standalone foundation.
-The minimum UART protocol and satellite source they depend on are included so
-the package can be understood and the Waveshare firmware can be built.
+---
 
-## Hardware and wiring
+## Hardware Architecture
+
+- **Main Controller:** LILYGO T-2CAN (`can0` and `can1` local)
+- **Remote CAN2 Satellite:** Waveshare Industrial ESP32-S3 RS485/CAN over full-duplex UART (`can2`)
 
 ```text
 Waveshare SH1.0                  LILYGO T-2CAN
@@ -26,58 +23,48 @@ IO2 / UART RX               <-  GPIO17 / UART TX
 3V3                         ->  not connected
 ```
 
-- CAN speed: 500 kbit/s
-- UART: 2,000,000 baud, 8N1
-- Waveshare CAN TX/RX GPIOs: 15/16
-- The safe satellite target is permanently hardware Listen-Only.
+- **CAN Bitrate:** `500 kbit/s`
+- **UART Link:** `2,000,000 baud`, `8N1`
+- **Waveshare CAN Pins:** TX `GPIO15` / RX `GPIO16`
+- **Safety Default:** `waveshare-remote-satellite-listenonly` compiles with `SATELLITE_FORCE_LISTEN_ONLY` (TX permanently disabled in software and TWAI queue).
 
-## Repository contents
+## Repository Contents
 
-- `esp32/.firmware/remote_can_protocol.h`: fixed 22-byte CRC-protected UART
-  protocol.
-- `esp32/.firmware/remote_can_rx_filter.h`: normal-operation allow-list that
-  prevents a busy third bus from flooding the LilyGO.
-- `esp32/.firmware/satellite/main.cpp`: complete Waveshare firmware with Wi-Fi
-  OTA, heartbeat/watchdog, permanent Listen-Only support, and persistent
-  `Ignore CAN2` control.
-- `esp32/reference/remote_can_driver.cpp`: the LilyGO `RemoteCanDriver`
-  integration excerpt.
-- `esp32/reference/can_driver.h`: the three-bus driver contract used by the
-  prototype.
-- `docs/integration.md`: routing, scheduling, and TX-safety requirements.
-- `PROVENANCE.md`: exact source commits requested for review.
+| Path | Description |
+| --- | --- |
+| `esp32/.firmware/remote_can_protocol.h` | Fixed 22-byte CRC16-protected UART frame & control protocol |
+| `esp32/.firmware/remote_can_rx_filter.h` | Operational CAN ID allow-list preventing bus saturation |
+| `esp32/.firmware/satellite/main.cpp` | Waveshare ESP32-S3 satellite firmware (Wi-Fi OTA, heartbeat, `Ignore CAN2` switch) |
+| `esp32/reference/remote_can_driver.cpp` | LILYGO `RemoteCanDriver` integration excerpt |
+| `esp32/reference/can_driver.h` | Three-bus driver interface contract |
+| `docs/integration.md` | Routing, scheduling, and TX-safety design rules |
+| `PROVENANCE.md` | Source commit provenance for the extracted changes |
+| `test/` | Portable C++ unit tests for protocol encoding & RX filtering |
 
-## What failed in the vehicle test
+## Root Cause Isolated in Vehicle Testing
 
-CAN2 RX itself worked. Real frames and counters arrived through the UART link.
-The problem appeared once the busy third bus was forwarded: local CAN0/CAN1
-state and transmissions became intermittent, the satellite link sometimes
-oscillated online/offline, and the remote RX queue commonly held 5-15 frames.
+`CAN2` RX frames and counters arrived reliably over UART, but forwarding an unfiltered busy third bus caused intermittent `CAN0`/`CAN1` state and link oscillations (with `5–15` frames queued). Reproducing the issue in permanent Listen-Only mode proved it was not caused by remote TX, and disabling the Waveshare CAN controller while retaining the UART heartbeat restored stable `CAN0`/`CAN1` operation — isolating the issue to RX load, scheduling, and cross-bus dispatch.
 
-The same behavior occurred with the satellite permanently Listen-Only, so the
-problem was not caused by remote CAN transmission. Stopping the Waveshare CAN
-controller while retaining the UART heartbeat restored stable CAN0/CAN1
-operation. This isolated the problem to remote RX load, scheduling, and
-cross-bus state dispatch.
+## Build & Test
 
-## Build and test
-
-Build the permanently Listen-Only Waveshare firmware:
-
-```bash
-cd esp32
-pio run -e waveshare-remote-satellite-listenonly
-```
-
-Run the portable protocol/filter tests:
+Run the portable host unit tests:
 
 ```bash
 make -C test check
 ```
 
-The LilyGO reference excerpt documents the driver contract but is deliberately
-not a standalone firmware target in this reduced repository.
+Build the permanently Listen-Only Waveshare satellite firmware:
+
+```bash
+pio run -d esp32 -e waveshare-remote-satellite-listenonly
+```
+
+> **Note:** The LILYGO driver files in `esp32/reference/` document the host-side contract and are not a standalone firmware target in this reduced repository.
+
+## Safety & Disclaimer
+
+This repository is provided for technical review and research purposes. Any hardware modifications or vehicle installations are at your own risk.
 
 ## License
 
-GPL-3.0, matching the source project.
+GPL-3.0 — see [LICENSE](LICENSE).
